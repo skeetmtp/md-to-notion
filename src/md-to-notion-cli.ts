@@ -5,6 +5,9 @@ import { Command } from "commander"
 import { description, version } from "../package.json"
 import { Client } from "@notionhq/client"
 import { collectCurrentFiles, archiveChildPages } from "./sync-to-notion"
+import { SyncStateManager } from "./sync-state"
+import path from "path"
+import os from "os"
 
 const REPL_TEXT = "${text}"
 const REPL_LINK_PATH_FROM_ROOT = "${linkPathFromRoot}"
@@ -25,6 +28,7 @@ async function main(
     useGithubLinkReplacer: string
     delete: boolean
     renew: boolean
+    stateFile: string
   }
 ) {
   let replacer
@@ -42,6 +46,11 @@ async function main(
         .replace("${text}", text)
         .replace("${linkPathFromRoot}", linkFromRootPath)
   }
+
+  // Initialize sync state manager
+  const stateFile = options.stateFile || path.join(os.homedir(), ".md-to-notion", "sync-state.json")
+  const syncStateManager = new SyncStateManager(stateFile)
+
   const dir = readMarkdownFiles(
     directory,
     path => {
@@ -49,7 +58,8 @@ async function main(
       const include = options.include || path
       return path.includes(include) && !path.includes(exclude)
     },
-    replacer
+    replacer,
+    syncStateManager
   )
 
   if (options.verbose) {
@@ -62,7 +72,7 @@ async function main(
       await archiveChildPages(notion, options.pageId)
     }
     const linkMap = await collectCurrentFiles(notion, options.pageId)
-    await syncToNotion(notion, options.pageId, dir, linkMap, options.delete)
+    await syncToNotion(notion, options.pageId, dir, linkMap, options.delete, syncStateManager)
   }
 
   console.log("Sync complete!")
@@ -108,6 +118,10 @@ program
     false
   )
   .option("-n, --renew", "Delete all pages in Notion before sync", false)
+  .option(
+    "-s, --state-file <path>",
+    "Path to sync state file (default: ~/.md-to-notion/sync-state.json)"
+  )
   .action(main)
 
 program.parse(process.argv)

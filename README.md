@@ -18,6 +18,8 @@
 - Replace local link to Notion page link automatically
 - Replace local link using custom replacement
 - Delete(archive) notion pages that does not exist(deleted files) in local (not to delete by default)
+- Track file changes using MD5 hashes to optimize sync performance
+- Support for `.notionignore` file to exclude files and directories from sync
 
 ## Usage
 
@@ -42,6 +44,38 @@ Or using npm:
 
 ```bash
 npm run dev -- -t <your-notion-token> -p <your-page-id> <directory-path>
+```
+
+### .notionignore
+
+You can create a `.notionignore` file in your directory to specify which files and directories should be excluded from syncing to Notion. The format is similar to `.gitignore`:
+
+```
+# Ignore all markdown files
+*.md
+
+# But keep important.md
+!important.md
+
+# Ignore specific directories
+docs/
+node_modules/
+
+# Ignore specific files
+config.json
+```
+
+### Performance Optimization
+
+The tool uses MD5 hashes to track changes in markdown files. This means:
+- Only files that have changed since the last sync will be updated in Notion
+- Subsequent syncs will be much faster as unchanged files are skipped
+- The state file is stored by default in `~/.md-to-notion/sync-state.json`
+
+You can specify a custom state file location:
+
+```bash
+npx @vrerv/md-to-notion -t <notion-api-secret> -p <notion-page-id> -s /path/to/state.json .
 ```
 
 This project markdown files are also published as Notion pages by this package using [GitHub Actions](./docs/github-actions.md).

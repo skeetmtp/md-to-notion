@@ -1,13 +1,9 @@
 import { readMarkdownFiles } from "../src/read-md"
 import * as fs from "fs"
-import * as path from "path"
 import { describe, expect, jest } from "@jest/globals"
 
 jest.mock("fs")
-jest.mock("path")
-
 const mockedFs = jest.mocked(fs)
-const mockedPath = jest.mocked(path)
 
 describe("readMarkdownFiles", () => {
   const mockDirPath = "mockDir"
@@ -22,20 +18,20 @@ describe("readMarkdownFiles", () => {
     isFIFO: () => false,
   }
 
-  function mockFile(baseName: string, fileName: string, content: string) {
+  function mockFile(_baseName: string, fileName: string, content: string) {
     mockedFs.readdirSync.mockReturnValue([
       {
-        name: Buffer.from(fileName),
+        name: fileName,
         isDirectory: () => false,
         isFile: () => true,
         ...defaultDirent,
-      },
+      } as any,
       {
-        name: Buffer.from("subdirectory"),
+        name: "subdirectory",
         isDirectory: () => true,
         isFile: () => false,
         ...defaultDirent,
-      },
+      } as any,
     ])
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
@@ -45,17 +41,6 @@ describe("readMarkdownFiles", () => {
     })
 
     mockedFs.readFileSync.mockReturnValue(content)
-    mockedPath.basename.mockReturnValue(baseName)
-    // use actual implementations
-    mockedPath.join.mockImplementation((...args: string[]) =>
-      (jest.requireActual("path") as unknown as path.PlatformPath).join(...args)
-    )
-    mockedPath.relative.mockImplementation((mockDirPath, baseName) =>
-      (jest.requireActual("path") as unknown as path.PlatformPath).relative(
-        mockDirPath,
-        baseName
-      )
-    )
   }
 
   beforeEach(() => {
@@ -75,10 +60,10 @@ describe("readMarkdownFiles", () => {
     expect(result).toEqual({
       name: ".",
       files: [
-        {
+        expect.objectContaining({
           fileName: "file1",
           getContent: expect.any(Function),
-        },
+        }),
       ],
       subfolders: [],
     })
@@ -136,10 +121,10 @@ describe("readMarkdownFiles", () => {
     expect(result).toEqual({
       name: ".",
       files: [
-        {
+        expect.objectContaining({
           fileName: "file1",
           getContent: expect.any(Function),
-        },
+        }),
       ],
       subfolders: [],
     })

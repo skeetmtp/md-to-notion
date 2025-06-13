@@ -1,6 +1,7 @@
 import { Client } from "@notionhq/client"
 import { Folder, MarkdownFileData } from "./read-md"
 import { LogLevel, makeConsoleLogger } from "./logging"
+import { SyncStateManager } from "./sync-state"
 import {
   BlockObjectResponse,
   GetPageResponse,
@@ -9,6 +10,7 @@ import {
   PartialBlockObjectResponse,
 } from "@notionhq/client/build/src/api-endpoints"
 import { mergeBlocks } from "./merge-blocks"
+import path from "path"
 
 function isBlockObjectResponse(
   child: PartialBlockObjectResponse | BlockObjectResponse
@@ -90,6 +92,7 @@ export async function collectCurrentFiles(
   const linkMap = new Map<string, NotionPageLink>()
 
   async function collectPages(pageId: string, parentTitle: string) {
+    logger(LogLevel.INFO, "Collecting pages...", { pageId, parentTitle })
     const response = await notion.pages.retrieve({
       page_id: pageId,
     })
@@ -137,7 +140,8 @@ export async function syncToNotion(
   pageId: string,
   dir: Folder,
   linkMap: Map<string, NotionPageLink> = new Map<string, NotionPageLink>(),
-  deleteNonExistentFiles = false
+  deleteNonExistentFiles = false,
+  syncStateManager?: SyncStateManager
 ): Promise<void> {
   async function appendBlocksInChunks(
     pageId: string,
@@ -343,13 +347,36 @@ export async function syncToNotion(
   )
 
   for (const page of pages) {
+    // Skip if the file hasn't changed
+    if (page.file.hasChanged === false) {
+      logger(LogLevel.INFO, 'Skipping unchanged file', {
+        pageId: page.pageId,
+        file: page.file,
+      })
+      continue
+    }
+
     const blocks = page.file.getContent(linkUrlMap)
-    logger(LogLevel.INFO, "Update blocks", {
+    logger(LogLevel.INFO, 'Update blocks', {
       pageId: page.pageId,
       file: page.file,
       newBlockSize: blocks.length,
     })
     await updateBlocks(page.pageId, blocks)
+
+    // Save state after each file is successfully synced
+    if (syncStateManager) {
+      const filePath = path.join(
+        page.file.fileName === "." ? "" : page.file.fileName,
+        ".md"
+      )
+      syncStateManager.saveFileState(filePath)
+    }
+  }
+
+  // Save any remaining pending changes
+  if (syncStateManager) {
+    syncStateManager.savePendingChanges()
   }
 
   // Track which pages from Notion were found in the local directory
