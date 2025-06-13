@@ -25,13 +25,13 @@ describe("readMarkdownFiles", () => {
   function mockFile(baseName: string, fileName: string, content: string) {
     mockedFs.readdirSync.mockReturnValue([
       {
-        name: fileName,
+        name: Buffer.from(fileName),
         isDirectory: () => false,
         isFile: () => true,
         ...defaultDirent,
       },
       {
-        name: "subdirectory",
+        name: Buffer.from("subdirectory"),
         isDirectory: () => true,
         isFile: () => false,
         ...defaultDirent,
