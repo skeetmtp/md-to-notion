@@ -38,6 +38,12 @@ npx @vrerv/md-to-notion --help
 npx @vrerv/md-to-notion -t <notion-api-secret> -p <notion-page-id> .
 ```
 
+또는 npm을 사용하여:
+
+```bash
+npm run dev -- -t <your-notion-token> -p <your-page-id> <directory-path>
+```
+
 이 프로젝트 마크다운 파일은 이 패키지에 의해 노션 페이지로도 게시됩니다.
 [md-to-notion 노션 페이지](https://vrerv.notion.site/MD-To-Notion-e85be6990664452b8669c72d989ce258)에서 확인할 수 있습니다.
 

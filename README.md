@@ -38,6 +38,12 @@ Update all markdown files under the current directory to Notion page
 npx @vrerv/md-to-notion -t <notion-api-secret> -p <notion-page-id> .
 ```
 
+Or using npm:
+
+```bash
+npm run dev -- -t <your-notion-token> -p <your-page-id> <directory-path>
+```
+
 This project markdown files are also published as Notion pages by this package using [GitHub Actions](./docs/github-actions.md).
 You can see the [md-to-notion Notion Page](https://vrerv.notion.site/MD-To-Notion-e85be6990664452b8669c72d989ce258)
 
