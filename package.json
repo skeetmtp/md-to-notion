@@ -33,7 +33,8 @@
     "prebuild": "npm run clean",
     "postbuild": "chmod +x build/src/md-to-notion-cli.js",
     "clean": "rm -rf ./build",
-    "dev": "ts-node src/md-to-notion-cli.ts"
+    "dev": "ts-node src/md-to-notion-cli.ts",
+    "build:binary": "npm run build && pkg . --targets node18-linux-x64,node18-macos-x64,node18-win-x64 --output build/md-to-notion"
   },
   "bin": {
     "md-to-notion": "./build/src/md-to-notion-cli.js"
@@ -62,6 +63,7 @@
     "prettier": "^2.8.8",
     "ts-jest": "^29.3.1",
     "ts-node": "^10.9.2",
-    "typescript": "^4.8.4"
+    "typescript": "^4.8.4",
+    "pkg": "^5.8.1"
   }
 }

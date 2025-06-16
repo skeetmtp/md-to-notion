@@ -46,6 +46,25 @@ Or using npm:
 npm run dev -- -t <your-notion-token> -p <your-page-id> <directory-path>
 ```
 
+### Standalone Binary
+
+You can build standalone executables for Linux, macOS, and Windows:
+
+```bash
+# Install dependencies
+npm install
+
+# Build binaries
+npm run build:binary
+```
+
+The binaries will be created in the `build` directory:
+- `md-to-notion-linux-x64` (Linux)
+- `md-to-notion-macos-x64` (macOS)
+- `md-to-notion-win-x64.exe` (Windows)
+
+These binaries are completely standalone and don't require Node.js to be installed.
+
 ### .notionignore
 
 You can create a `.notionignore` file in your directory to specify which files and directories should be excluded from syncing to Notion. The format is similar to `.gitignore`:
