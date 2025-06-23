@@ -57,7 +57,12 @@ export function shouldIgnorePath(
     const pattern = normalizePattern(rawPattern)
     if (pattern.startsWith("!")) {
       // Negation: if matches, do NOT ignore
-      if (minimatch(normalizedPath, pattern.slice(1), { dot: true, matchBase: true })) {
+      if (
+        minimatch(normalizedPath, pattern.slice(1), {
+          dot: true,
+          matchBase: true,
+        })
+      ) {
         ignored = false
       }
     } else {

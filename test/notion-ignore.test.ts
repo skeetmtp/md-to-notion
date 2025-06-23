@@ -60,7 +60,9 @@ node_modules/
       const patterns = ["docs/", "node_modules/"]
 
       expect(shouldIgnorePath("./docs/file.md", patterns)).toBe(true)
-      expect(shouldIgnorePath("./node_modules/package/file.md", patterns)).toBe(true)
+      expect(shouldIgnorePath("./node_modules/package/file.md", patterns)).toBe(
+        true
+      )
       expect(shouldIgnorePath("./src/file.md", patterns)).toBe(false)
     })
 

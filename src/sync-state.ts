@@ -1,9 +1,9 @@
-import fs from 'fs'
-import path from 'path'
-import crypto from 'crypto'
-import { LogLevel, makeConsoleLogger } from './logging'
+import fs from "fs"
+import path from "path"
+import crypto from "crypto"
+import { LogLevel, makeConsoleLogger } from "./logging"
 
-const logger = makeConsoleLogger('sync-state')
+const logger = makeConsoleLogger("sync-state")
 
 interface SyncState {
   fileHashes: Record<string, string>
@@ -22,11 +22,11 @@ export class SyncStateManager {
   private loadState(): SyncState {
     try {
       if (fs.existsSync(this.statePath)) {
-        const data = fs.readFileSync(this.statePath, 'utf-8')
+        const data = fs.readFileSync(this.statePath, "utf-8")
         return JSON.parse(data)
       }
     } catch (error) {
-      logger(LogLevel.ERROR, 'Error loading sync state', { error })
+      logger(LogLevel.ERROR, "Error loading sync state", { error })
     }
     return { fileHashes: {} }
   }
@@ -39,12 +39,12 @@ export class SyncStateManager {
       }
       fs.writeFileSync(this.statePath, JSON.stringify(this.state, null, 2))
     } catch (error) {
-      logger(LogLevel.ERROR, 'Error saving sync state', { error })
+      logger(LogLevel.ERROR, "Error saving sync state", { error })
     }
   }
 
   private calculateMD5(content: string): string {
-    return crypto.createHash('md5').update(content).digest('hex')
+    return crypto.createHash("md5").update(content).digest("hex")
   }
 
   public hasFileChanged(filePath: string, content: string): boolean {

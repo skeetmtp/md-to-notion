@@ -20,10 +20,105 @@ function isBlockObjectResponse(
 
 const logger = makeConsoleLogger("sync-to-notion")
 const NOTION_BLOCK_LIMIT = 100
+const DEFAULT_PARALLEL_LIMIT = 25
+const DEFAULT_REQUEST_DELAY = 50
+const MAX_RETRY_ATTEMPTS = 3
+const INITIAL_RETRY_DELAY = 1000
 
 export type NotionPageLink = {
   id: string
   link: string
+}
+
+export interface CollectionOptions {
+  parallelLimit?: number
+  requestDelay?: number
+  maxRetryAttempts?: number
+  maxDepth?: number
+  progressCallback?: (processed: number, total: number) => void
+}
+
+/**
+ * Sleep utility for rate limiting
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * Retry a function with exponential backoff
+ */
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxAttempts: number = MAX_RETRY_ATTEMPTS,
+  initialDelay: number = INITIAL_RETRY_DELAY
+): Promise<T> {
+  let lastError: Error | undefined
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error as Error
+
+      // Check if it's a rate limit error
+      const isRateLimit =
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        (error.status === 429 || error.status === 503)
+
+      if (attempt === maxAttempts || !isRateLimit) {
+        throw error
+      }
+
+      const delay = initialDelay * Math.pow(2, attempt - 1)
+      logger(
+        LogLevel.INFO,
+        `Rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})`
+      )
+      await sleep(delay)
+    }
+  }
+
+  throw lastError || new Error("Unknown error occurred")
+}
+
+/**
+ * Parallel queue processor with concurrency limit
+ */
+async function processInParallel<T, R>(
+  items: T[],
+  processor: (item: T) => Promise<R>,
+  limit: number,
+  requestDelay = 0
+): Promise<R[]> {
+  const results: (R | undefined)[] = new Array(items.length)
+  const executing = new Set<Promise<void>>()
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item === undefined) continue
+    const index = i
+
+    const promise = (async () => {
+      if (requestDelay > 0 && executing.size > 0) {
+        await sleep(requestDelay)
+      }
+      const result = await processor(item)
+      results[index] = result
+    })()
+
+    executing.add(promise)
+    promise.finally(() => executing.delete(promise))
+
+    if (executing.size >= limit) {
+      await Promise.race(executing)
+    }
+  }
+
+  await Promise.all(executing)
+  return results.filter((r): r is R => r !== undefined)
 }
 
 /**
@@ -87,41 +182,136 @@ export const findMaxDepth = (block: any, depth = 0): number => {
 
 export async function collectCurrentFiles(
   notion: Client,
-  rootPageId: string
+  rootPageId: string,
+  options: CollectionOptions = {}
 ): Promise<Map<string, NotionPageLink>> {
+  const {
+    parallelLimit = DEFAULT_PARALLEL_LIMIT,
+    requestDelay = DEFAULT_REQUEST_DELAY,
+    maxRetryAttempts = MAX_RETRY_ATTEMPTS,
+    maxDepth = Infinity,
+    progressCallback,
+  } = options
+
   const linkMap = new Map<string, NotionPageLink>()
+  const processedIds = new Set<string>()
+  const pendingTasks = new Set<Promise<void>>()
+  let processedCount = 0
+  let discoveredCount = 1 // Start with root page
 
-  async function collectPages(pageId: string, parentTitle: string) {
-    logger(LogLevel.INFO, "Collecting pages...", { pageId, parentTitle })
-    const response = await notion.pages.retrieve({
-      page_id: pageId,
-    })
+  async function processPageParallel(
+    pageId: string,
+    parentTitle: string,
+    depth: number
+  ): Promise<void> {
+    if (processedIds.has(pageId) || depth > maxDepth) {
+      return
+    }
+    processedIds.add(pageId)
 
-    logger(LogLevel.DEBUG, "", response)
+    logger(LogLevel.INFO, "Collecting pages...", { pageId, parentTitle, depth })
 
-    const pageTitle = getPageTitle(response)
+    try {
+      // Batch both API calls in parallel for better performance
+      const [pageResponse, childrenResponse] = await Promise.all([
+        retryWithBackoff(
+          () => notion.pages.retrieve({ page_id: pageId }),
+          maxRetryAttempts
+        ),
+        retryWithBackoff(
+          () => notion.blocks.children.list({ block_id: pageId }),
+          maxRetryAttempts
+        ),
+      ])
 
-    if (response.object === "page") {
+      logger(LogLevel.DEBUG, "", pageResponse)
+
+      if (pageResponse.object !== "page") {
+        processedCount++
+        if (progressCallback) {
+          progressCallback(
+            processedCount,
+            Math.max(discoveredCount, processedCount)
+          )
+        }
+        return
+      }
+
+      const pageTitle = getPageTitle(pageResponse)
       linkMap.set(
         commonPageKey(parentTitle, pageTitle),
-        newNotionPageLink(response as PageObjectResponse)
+        newNotionPageLink(pageResponse as PageObjectResponse)
       )
-      const childrenResponse = await notion.blocks.children.list({
-        block_id: pageId,
-      })
+
+      // Process child pages
+      const newParentTitle =
+        pageId === rootPageId ? "." : parentTitle + "/" + pageTitle
+      const childPageIds: string[] = []
 
       for (const child of childrenResponse.results) {
         if (isBlockObjectResponse(child) && child.type === "child_page") {
-          await collectPages(
-            child.id,
-            pageId === rootPageId ? "." : parentTitle + "/" + pageTitle
-          )
+          childPageIds.push(child.id)
         }
       }
+
+      // Update discovered count and start processing children immediately
+      discoveredCount += childPageIds.length
+
+      // Process child pages in parallel, but respect the overall parallel limit
+      for (const childId of childPageIds) {
+        // Wait for available slot in parallel processing
+        while (pendingTasks.size >= parallelLimit) {
+          await Promise.race(pendingTasks)
+        }
+
+        if (requestDelay > 0) {
+          await sleep(requestDelay)
+        }
+
+        const childPromise = processPageParallel(
+          childId,
+          newParentTitle,
+          depth + 1
+        )
+        pendingTasks.add(childPromise)
+        childPromise.finally(() => pendingTasks.delete(childPromise))
+      }
+
+      processedCount++
+      if (progressCallback) {
+        progressCallback(
+          processedCount,
+          Math.max(discoveredCount, processedCount)
+        )
+      }
+    } catch (error) {
+      logger(LogLevel.ERROR, "Error processing page", { pageId, error })
+      processedCount++
+      if (progressCallback) {
+        progressCallback(
+          processedCount,
+          Math.max(discoveredCount, processedCount)
+        )
+      }
+      throw error
     }
   }
 
-  await collectPages(rootPageId, ".")
+  // Start processing with root page
+  try {
+    const rootPromise = processPageParallel(rootPageId, ".", 0)
+    pendingTasks.add(rootPromise)
+    rootPromise.finally(() => pendingTasks.delete(rootPromise))
+
+    // Wait for all page processing to complete
+    await Promise.all(pendingTasks)
+  } catch (error) {
+    // Ensure all pending tasks are cleaned up before rethrowing
+    await Promise.allSettled(pendingTasks)
+    throw error
+  }
+
+  logger(LogLevel.INFO, `Collected ${linkMap.size} pages total`)
   return linkMap
 }
 
@@ -141,8 +331,15 @@ export async function syncToNotion(
   dir: Folder,
   linkMap: Map<string, NotionPageLink> = new Map<string, NotionPageLink>(),
   deleteNonExistentFiles = false,
-  syncStateManager?: SyncStateManager
+  syncStateManager?: SyncStateManager,
+  options: CollectionOptions = {}
 ): Promise<void> {
+  const {
+    parallelLimit = DEFAULT_PARALLEL_LIMIT,
+    requestDelay = DEFAULT_REQUEST_DELAY,
+    maxRetryAttempts = MAX_RETRY_ATTEMPTS,
+    progressCallback,
+  } = options
   async function appendBlocksInChunks(
     pageId: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -164,11 +361,15 @@ export async function syncToNotion(
           return block
         })
       try {
-        const response = await notion.blocks.children.append({
-          block_id: pageId,
-          children: chunk,
-          after: afterId ? afterId : undefined,
-        })
+        const response = await retryWithBackoff(
+          () =>
+            notion.blocks.children.append({
+              block_id: pageId,
+              children: chunk,
+              after: afterId ? afterId : undefined,
+            }),
+          maxRetryAttempts
+        )
 
         // Check for children in the chunk and append them separately
         for (const index in children) {
@@ -204,44 +405,128 @@ export async function syncToNotion(
       await onUpdated(pageId)
       return pageId
     } else {
-      const response = await notion.pages.create({
-        parent: { page_id: parentId },
-        properties: {
-          title: [{ text: { content: folderName } }],
-        },
-      })
+      const response = await retryWithBackoff(
+        () =>
+          notion.pages.create({
+            parent: { page_id: parentId },
+            properties: {
+              title: [{ text: { content: folderName } }],
+            },
+          }),
+        maxRetryAttempts
+      )
       linkMap.set(key, newNotionPageLink(response as PageObjectResponse))
       return response.id
     }
   }
 
-  async function getExistingBlocks(notion: Client, pageId: string) {
+  async function getExistingBlocks(
+    notion: Client,
+    pageId: string,
+    maxDepth = 10,
+    currentDepth = 0
+  ) {
     const existingBlocks: BlockObjectResponse[] = []
-    let cursor: string | null | undefined = undefined
+
+    // Fetch all pages in parallel for better performance
+    const allPages = await getAllBlockPages(notion, pageId)
+    existingBlocks.push(...allPages)
+
+    // Only fetch children if we haven't reached max depth
+    if (currentDepth < maxDepth) {
+      // Process child blocks in parallel with rate limiting
+      const blocksWithChildren = existingBlocks.filter(
+        block => block.has_children
+      )
+
+      if (blocksWithChildren.length > 0) {
+        await processInParallel(
+          blocksWithChildren,
+          async block => {
+            const children = await getExistingBlocks(
+              notion,
+              block.id,
+              maxDepth,
+              currentDepth + 1
+            )
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            block[block.type].children = children
+          },
+          Math.min(parallelLimit, 8), // Increased from 5 to 8 for better parallelism
+          requestDelay
+        )
+      }
+    } else {
+      logger(
+        LogLevel.INFO,
+        `Reached max depth ${maxDepth}, skipping child blocks for page ${pageId}`
+      )
+    }
+
+    return existingBlocks
+  }
+
+  async function getAllBlockPages(
+    notion: Client,
+    pageId: string
+  ): Promise<BlockObjectResponse[]> {
+    const allBlocks: BlockObjectResponse[] = []
+    let cursor: string | undefined = undefined
+
+    // Discover all pages first
+    const pageRequests: Array<{ cursor?: string }> = [{ cursor: undefined }]
 
     do {
-      const response: ListBlockChildrenResponse =
-        await notion.blocks.children.list({
-          block_id: pageId,
-          start_cursor: cursor,
-        })
-      existingBlocks.push(
-        ...(response.results.filter(
-          isBlockObjectResponse
-        ) as BlockObjectResponse[])
+      const response: ListBlockChildrenResponse = await retryWithBackoff(
+        () =>
+          notion.blocks.children.list({
+            block_id: pageId,
+            start_cursor: cursor,
+          }),
+        maxRetryAttempts
       )
-      cursor = response.has_more ? response.next_cursor : undefined
+
+      const blocks = response.results.filter(
+        isBlockObjectResponse
+      ) as BlockObjectResponse[]
+      allBlocks.push(...blocks)
+
+      cursor = response.has_more ? response.next_cursor ?? undefined : undefined
+
+      // If there are more pages, prepare to fetch them in parallel
+      if (cursor) {
+        pageRequests.push({ cursor })
+      }
     } while (cursor)
 
-    // you have to get children blocks if the block has children
-    for (const block of existingBlocks) {
-      if (block.has_children) {
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        block[block.type].children = await getExistingBlocks(notion, block.id)
-      }
+    // If we only had one page, return the blocks immediately
+    if (pageRequests.length <= 1) {
+      return allBlocks
     }
-    return existingBlocks
+
+    // For multiple pages, fetch remaining pages in parallel (excluding the first which we already fetched)
+    const remainingPagePromises = pageRequests
+      .slice(1)
+      .map(async ({ cursor: pageCursor }) => {
+        const response: ListBlockChildrenResponse = await retryWithBackoff(
+          () =>
+            notion.blocks.children.list({
+              block_id: pageId,
+              start_cursor: pageCursor,
+            }),
+          maxRetryAttempts
+        )
+        return response.results.filter(
+          isBlockObjectResponse
+        ) as BlockObjectResponse[]
+      })
+
+    // Wait for all remaining pages and combine results
+    const remainingBlocks = await Promise.all(remainingPagePromises)
+    const finalBlocks = [...allBlocks, ...remainingBlocks.flat()]
+
+    return finalBlocks
   }
 
   async function syncFolder(
@@ -295,7 +580,7 @@ export async function syncToNotion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function updateBlocks(pageId: string, newBlocks: any[]) {
     const blockIdSetToDelete = new Set<string>()
-    const existingBlocks = await getExistingBlocks(notion, pageId)
+    const existingBlocks = await getExistingBlocks(notion, pageId, 10, 0)
     await mergeBlocks(
       existingBlocks,
       newBlocks,
@@ -334,7 +619,10 @@ export async function syncToNotion(
     )
     for (const blockId of blockIdSetToDelete) {
       logger(LogLevel.INFO, "Deleting a block", { blockId })
-      await notion.blocks.delete({ block_id: blockId })
+      await retryWithBackoff(
+        () => notion.blocks.delete({ block_id: blockId }),
+        maxRetryAttempts
+      )
     }
   }
 
@@ -346,10 +634,18 @@ export async function syncToNotion(
     Array.from(linkMap.entries()).map(([key, value]) => [key, value.link])
   )
 
-  for (const page of pages) {
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i]
+    if (!page) continue
+
+    // Progress callback for file processing
+    if (progressCallback) {
+      progressCallback(i, pages.length)
+    }
+
     // Skip if the file hasn't changed
     if (page.file.hasChanged === false) {
-      logger(LogLevel.INFO, 'Skipping unchanged file', {
+      logger(LogLevel.INFO, "Skipping unchanged file", {
         pageId: page.pageId,
         file: page.file,
       })
@@ -357,10 +653,11 @@ export async function syncToNotion(
     }
 
     const blocks = page.file.getContent(linkUrlMap)
-    logger(LogLevel.INFO, 'Update blocks', {
+    logger(LogLevel.INFO, "Update blocks", {
       pageId: page.pageId,
       file: page.file,
       newBlockSize: blocks.length,
+      progress: `${i + 1}/${pages.length}`,
     })
     await updateBlocks(page.pageId, blocks)
 
@@ -372,6 +669,11 @@ export async function syncToNotion(
       )
       syncStateManager.saveFileState(filePath)
     }
+  }
+
+  // Final progress callback
+  if (progressCallback) {
+    progressCallback(pages.length, pages.length)
   }
 
   // Save any remaining pending changes
@@ -452,9 +754,13 @@ export async function syncToNotion(
 
 export async function archiveChildPages(notion: Client, pageId: string) {
   logger(LogLevel.INFO, `Archiving child pages of: ${pageId}`)
-  const childrenResponse = await notion.blocks.children.list({
-    block_id: pageId,
-  })
+  const childrenResponse = await retryWithBackoff(
+    () =>
+      notion.blocks.children.list({
+        block_id: pageId,
+      }),
+    MAX_RETRY_ATTEMPTS
+  )
 
   for (const child of childrenResponse.results) {
     if (isBlockObjectResponse(child) && child.type === "child_page") {
@@ -464,8 +770,12 @@ export async function archiveChildPages(notion: Client, pageId: string) {
 }
 
 export async function archivePage(notion: Client, pageId: string) {
-  await notion.pages.update({
-    page_id: pageId,
-    archived: true,
-  })
+  await retryWithBackoff(
+    () =>
+      notion.pages.update({
+        page_id: pageId,
+        archived: true,
+      }),
+    MAX_RETRY_ATTEMPTS
+  )
 }

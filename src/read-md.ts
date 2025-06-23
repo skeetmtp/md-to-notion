@@ -63,7 +63,10 @@ export function readMarkdownFiles(
 
       // Check if path should be ignored by .notionignore
       if (shouldIgnorePath(normalizedPath, ignorePatterns)) {
-        logger(LogLevel.INFO, `Ignoring path due to .notionignore: ${pathFromRoot}`)
+        logger(
+          LogLevel.INFO,
+          `Ignoring path due to .notionignore: ${pathFromRoot}`
+        )
         continue
       }
 
@@ -152,11 +155,16 @@ export function printFolderHierarchy(
 
   // If ignore patterns are provided, print ignored files
   if (ignorePatterns && basePath) {
-    const currentPath = folder.name === "." ? basePath : path.join(basePath, folder.name)
+    const currentPath =
+      folder.name === "." ? basePath : path.join(basePath, folder.name)
     try {
-      const ignoredFiles = fs.readdirSync(currentPath)
+      const ignoredFiles = fs
+        .readdirSync(currentPath)
         .filter(file => {
-          const filePath = path.join(folder.name === "." ? "" : folder.name, file)
+          const filePath = path.join(
+            folder.name === "." ? "" : folder.name,
+            file
+          )
           const normalizedPath = "./" + filePath
           return shouldIgnorePath(normalizedPath, ignorePatterns)
         })

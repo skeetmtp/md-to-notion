@@ -59,6 +59,7 @@ npm run build:binary
 ```
 
 The binaries will be created in the `build` directory:
+
 - `md-to-notion-linux-x64` (Linux)
 - `md-to-notion-macos-x64` (macOS)
 - `md-to-notion-win-x64.exe` (Windows)
@@ -87,6 +88,7 @@ config.json
 ### Performance Optimization
 
 The tool uses MD5 hashes to track changes in markdown files. This means:
+
 - Only files that have changed since the last sync will be updated in Notion
 - Subsequent syncs will be much faster as unchanged files are skipped
 - The state file is stored by default in `~/.md-to-notion/sync-state.json`
