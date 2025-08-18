@@ -46,6 +46,18 @@ Or using npm:
 npm run dev -- -t <your-notion-token> -p <your-page-id> <directory-path>
 ```
 
+### Run Test locally
+
+```bash
+npm run test
+```
+
+Run specific test file:
+
+```bash
+npm test -- --testPathPattern=sync-state.test.ts
+```
+
 ### Standalone Binary
 
 You can build standalone executables for Linux, macOS, and Windows:

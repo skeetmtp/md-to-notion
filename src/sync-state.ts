@@ -16,10 +16,14 @@ export class SyncStateManager {
 
   constructor(statePath: string) {
     this.statePath = statePath
-    this.state = this.loadState()
+    this.state = { fileHashes: {} }
   }
 
-  private loadState(): SyncState {
+  public loadState(): void {
+    this.state = this._loadState()
+  }
+
+  private _loadState(): SyncState {
     try {
       if (fs.existsSync(this.statePath)) {
         const data = fs.readFileSync(this.statePath, "utf-8")
@@ -47,8 +51,12 @@ export class SyncStateManager {
     return crypto.createHash("md5").update(content).digest("hex")
   }
 
-  public hasFileChanged(filePath: string, content: string): boolean {
-    const currentHash = this.calculateMD5(content)
+  public hasFileChanged(
+    filePath: string,
+    content: string,
+    hashFunction: (content: string) => string = this.calculateMD5
+  ): boolean {
+    const currentHash = hashFunction(content)
     const previousHash = this.state.fileHashes[filePath]
 
     if (previousHash !== currentHash) {

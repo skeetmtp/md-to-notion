@@ -62,6 +62,11 @@ async function main(
     path.join(os.homedir(), ".md-to-notion", "sync-state.json")
   const syncStateManager = new SyncStateManager(stateFile)
 
+  // Load state only if we do not restart from scratch (renew)
+  if (!options.renew) {
+    syncStateManager.loadState()
+  }
+
   const dir = readMarkdownFiles(
     directory,
     path => {
